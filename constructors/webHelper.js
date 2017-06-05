@@ -3,6 +3,9 @@ const express = require('express');
 const app = express();
 const fs = require('fs');
 const path = require('path');
+const bodyParser = require('body-parser');
+const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 const botCfg = require('../configs/bot.json');
 
@@ -12,10 +15,12 @@ class WebHelper {
 		this.shardManager = shardManager;
 		this.db = db;
 		this.commands = this.indexCommands();
+		this.utils = this.createUtilityFunctions();
 	}
 
 	listen() {
 		app.use(express.static('./web/'));
+		app.use(bodyParser.json());
 
 		app.get('/api/stats', async(req, res) => {
 
@@ -68,6 +73,40 @@ class WebHelper {
 
 		});
 
+		app.post('/api/login', async(req, res) => {
+			const userQuery = await this.db.query('SELECT * FROM users WHERE id = $1', [req.body.id || 0]);
+			if(userQuery.rowCount === 0) {
+				res.status(401);
+				return res.end('Invalid Login');
+			}
+
+			const user = userQuery.rows[0];
+			const match = await bcrypt.compare(req.body.password || '', user.password);
+			if(!match) {
+				res.status(401);
+				return res.end('Invalid Login');
+			}
+
+			const token = crypto.createHash('md5').update([user.id, Date.now()].join('&')).digest('hex');
+			await this.db.query('INSERT INTO tokens VALUES ($1, $2, $3)', [token, user.id, Date.now() + 7 * 24 * 60 * 60 * 1000]);
+			res.end(JSON.stringify({token: token, userID: user.id}));
+		});
+
+		app.get('/api/token/:token', async(req, res) => {
+			const user = await this.utils.getUserFromToken(req.params.token);
+			if(!user) {
+				res.status(404);
+				return res.send('Invalid Token');
+			}
+
+			res.end(JSON.stringify(user));
+		});
+
+		app.use('/api', (req, res) => {
+			res.status(501);
+			res.end('Not Implemented');
+		});
+
 		app.use('/pages', (req, res) => {
 			res.status(404);
 			res.end('Not Found');
@@ -116,6 +155,22 @@ class WebHelper {
 		loadCommandsIn('./commands/');
 
 		return commands;
+	}
+
+	createUtilityFunctions() {
+		const getUserFromToken = async(token) => {
+			const tokenQuery = await this.db.query('SELECT * FROM tokens WHERE token = $1', [token]);
+			if(tokenQuery.rowCount === 0) return null;
+			const tokenObj = tokenQuery.rows[0];
+			return {id: tokenObj.userid};
+		};
+
+		const verifyToken = async(token) => {
+			const tokenQuery = await this.db.query('SELECT count(*) FROM tokens WHERE token = $1', [token]);
+			return tokenQuery.rows[0].count > 0;
+		};
+
+		return {getUserFromToken: getUserFromToken, verifyToken: verifyToken};
 	}
 
 }

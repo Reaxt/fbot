@@ -74,6 +74,7 @@ class ResourceLoader {
 			}
 		});
 		this.bot.childProcess = require('child_process');
+		this.bot.bcrypt = require('bcrypt');
 		this.bot.aiFilter = new AiFilter();
 	}
 
